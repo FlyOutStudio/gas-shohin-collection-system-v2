@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: sans-serif; padding: 10px; }
+    #keyword { width: 95%; padding: 8px; margin-bottom: 10px; }
+    #submitBtn { padding: 8px 16px; }
+    #status { margin-top: 15px; font-style: italic; color: #555; }
+  </style>
+</head>
+<body>
+  <h3>調査したい商品のキーワードを入力してください</h3>
+  <input type="text" id="keyword" placeholder="例：ガーデンライト ソーラー">
+  <button id="submitBtn" onclick="search()">情報を収集</button>
+  <div id="status"></div>
+
+  <script>
+    function search() {
+      const keyword = document.getElementById('keyword').value.trim();
+      if (!keyword) {
+        alert('キーワードを入力してください');
+        return;
+      }
+      document.getElementById('submitBtn').disabled = true;
+      document.getElementById('status').innerText = '情報収集中です...';
+
+      google.script.run
+        .withSuccessHandler(() => google.script.host.close())
+        .withFailureHandler(err => {
+          alert('エラー: ' + err.message);
+          google.script.host.close();
+        })
+        .searchProducts(keyword);
+    }
+  </script>
+</body>
+</html>
