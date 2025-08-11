@@ -64,7 +64,7 @@ function searchProducts(keyword) {
   // ヘッダー
   const headers = [
     '収集日時','モール','ランキング順位','商品名','価格','URL',
-    '販売者','レビュー数','評価','商品説明（抜粋）'
+    '販売者','レビュー数','評価','スクショURL','商品説明（抜粋）'
   ];
   sheet.appendRow(headers);
 
@@ -72,7 +72,7 @@ function searchProducts(keyword) {
   [...rakuten, ...yahoo].forEach(p =>
     sheet.appendRow([
       p.collectedAt, p.platform, p.rank, p.name, p.price,
-      p.url, p.shopName, p.reviewCount, p.reviewAvg, p.description
+      p.url, p.shopName, p.reviewCount, p.reviewAvg, '', p.description
     ])
   );
 
@@ -93,7 +93,7 @@ const fetchRakutenItems = (keyword, hits = 10) => {
     applicationId : CONFIG.RAKUTEN_APP_ID,
     keyword,
     hits,
-    sort          : '-reviewCount',
+    sort          : 'sales',
     formatVersion : 2,
     elements      : [
       'itemName','itemPrice','itemUrl','shopName',
@@ -124,7 +124,7 @@ const fetchYahooItems = (keyword, hits = 10) => {
     appid : CONFIG.YAHOO_APP_ID,
     query : keyword,
     hits,
-    sort  : '-review_count'
+    sort  : 'sales'
   });
 
   const raw   = UrlFetchApp.fetch(`${CONFIG.YAHOO_ITEM_API}?${params}`).getContentText();
