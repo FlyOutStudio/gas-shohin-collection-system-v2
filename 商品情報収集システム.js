@@ -93,7 +93,7 @@ const fetchRakutenItems = (keyword, hits = 10) => {
     applicationId : CONFIG.RAKUTEN_APP_ID,
     keyword,
     hits,
-    sort          : 'sales',
+    sort          : 'standard',
     formatVersion : 2,
     elements      : [
       'itemName','itemPrice','itemUrl','shopName',
@@ -124,7 +124,7 @@ const fetchYahooItems = (keyword, hits = 10) => {
     appid : CONFIG.YAHOO_APP_ID,
     query : keyword,
     hits,
-    sort  : 'sales'
+    sort  : '-score'
   });
 
   const raw   = UrlFetchApp.fetch(`${CONFIG.YAHOO_ITEM_API}?${params}`).getContentText();
