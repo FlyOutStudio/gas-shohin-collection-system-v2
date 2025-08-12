@@ -175,10 +175,10 @@ const extractDomain = (url) => {
 /* -------- Yahoo!：rank 付与 -------------------------------------- */
 const fetchYahooItems = (keyword, hits = 10) => {
   const params = toQuery({
-    appid : CONFIG.YAHOO_APP_ID,
-    query : keyword,
-    hits,
-    sort  : '-score'
+    appid   : CONFIG.YAHOO_APP_ID,
+    query   : keyword,
+    results : hits,  // Yahoo APIではresultsパラメータを使用
+    sort    : '-score'
   });
 
   const raw   = UrlFetchApp.fetch(`${CONFIG.YAHOO_ITEM_API}?${params}`).getContentText();
