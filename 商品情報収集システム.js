@@ -39,11 +39,11 @@ const TOP_N = 10;
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('商品調査ツール')
-    .addItem('商品情報を収集（楽天・Yahoo・Google）', 'showSearchDialog')
+    .addItem('🚀 フル自動調査（検索→スクショ→PDF）', 'showFullAutoSearchDialog')
     .addSeparator()
+    .addItem('商品情報を収集（楽天・Yahoo・Google）', 'showSearchDialog')
     .addItem('各モール上位3件のPDFスクショを取得', 'captureScreenshots')
     .addItem('Google検索結果をDiffbotで詳細分析', 'enrichByDiffbot')
-    .addItem('Diffbot詳細レポートをPDF出力', 'createDiffbotDetailsPdf')
     .addToUi();
 }
 
@@ -54,6 +54,12 @@ function showSearchDialog() {
   const html = HtmlService.createHtmlOutputFromFile('SearchDialog')
                 .setWidth(400).setHeight(250);
   SpreadsheetApp.getUi().showModalDialog(html, '商品キーワード入力');
+}
+
+function showFullAutoSearchDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('SearchDialog')
+                .setWidth(400).setHeight(300);
+  SpreadsheetApp.getUi().showModalDialog(html, '🚀 フル自動調査 - キーワード入力');
 }
 
 /* ------------------------------------------------------------------ */
@@ -83,6 +89,51 @@ function searchProducts(keyword) {
   );
 
   return `検索完了：${rakuten.length + yahoo.length + google.length} 件取得`;
+}
+
+/**
+ * フル自動調査：検索→スクショ→Diffbot PDF作成まで一気に実行
+ */
+function runFullAutoSearch(keyword) {
+  if (!keyword) throw new Error('キーワードが空です');
+  
+  const startTime = new Date();
+  console.log(`🚀 フル自動調査開始: ${keyword}`);
+  
+  try {
+    // ステップ1: 商品情報収集
+    SpreadsheetApp.getActiveSpreadsheet().toast('📊 商品情報を収集中...', 'フル自動調査', 5);
+    const searchResult = searchProducts(keyword);
+    console.log(`✅ 商品検索完了: ${searchResult}`);
+    
+    // 少し待機してシートが更新されるのを待つ
+    Utilities.sleep(2000);
+    
+    // ステップ2: スクリーンショット取得
+    SpreadsheetApp.getActiveSpreadsheet().toast('📸 スクリーンショット取得中... (数分かかります)', 'フル自動調査', 10);
+    captureScreenshots();
+    console.log('✅ スクリーンショット完了');
+    
+    // ステップ3: Diffbot詳細分析 + PDF作成
+    SpreadsheetApp.getActiveSpreadsheet().toast('🤖 Diffbot詳細分析中... (数分かかります)', 'フル自動調査', 10);
+    enrichByDiffbot(); // この中で自動的にPDF作成される
+    console.log('✅ Diffbot分析 + PDF作成完了');
+    
+    // 完了通知
+    const duration = Math.round((new Date() - startTime) / 1000);
+    const message = `🎉 フル自動調査完了！\n⏱️ 実行時間: ${duration}秒\n📁 結果はDriveに保存されました`;
+    
+    SpreadsheetApp.getActiveSpreadsheet().toast(message, 'フル自動調査完了', 15);
+    console.log(`🎉 フル自動調査完了: ${duration}秒`);
+    
+    return message;
+    
+  } catch (error) {
+    const errorMsg = `❌ フル自動調査エラー: ${error.message}`;
+    console.error(errorMsg);
+    SpreadsheetApp.getActiveSpreadsheet().toast(errorMsg, 'エラー', 10);
+    throw error;
+  }
 }
 
 /* ------------------------------------------------------------------ */

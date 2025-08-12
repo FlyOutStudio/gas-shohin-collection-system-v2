@@ -12,7 +12,10 @@
 <body>
   <h3>調査したい商品のキーワードを入力してください</h3>
   <input type="text" id="keyword" placeholder="例：ガーデンライト ソーラー">
-  <button id="submitBtn" onclick="search()">情報を収集</button>
+  <div style="margin: 10px 0;">
+    <button id="submitBtn" onclick="search()">情報を収集</button>
+    <button id="fullAutoBtn" onclick="fullAutoSearch()" style="background-color: #4CAF50; color: white; margin-left: 10px;">🚀 フル自動調査</button>
+  </div>
   <div id="status"></div>
 
   <script>
@@ -32,6 +35,33 @@
           google.script.host.close();
         })
         .searchProducts(keyword);
+    }
+
+    function fullAutoSearch() {
+      const keyword = document.getElementById('keyword').value.trim();
+      if (!keyword) {
+        alert('キーワードを入力してください');
+        return;
+      }
+      
+      if (!confirm('フル自動調査を開始します。\n検索→スクショ→PDF作成まで数分かかります。\n実行中は他の作業をしていて大丈夫です。\n\n続行しますか？')) {
+        return;
+      }
+      
+      document.getElementById('submitBtn').disabled = true;
+      document.getElementById('fullAutoBtn').disabled = true;
+      document.getElementById('status').innerText = '🚀 フル自動調査を開始しました...';
+
+      google.script.run
+        .withSuccessHandler(() => {
+          alert('フル自動調査が開始されました！\n完了までしばらくお待ちください。');
+          google.script.host.close();
+        })
+        .withFailureHandler(err => {
+          alert('エラー: ' + err.message);
+          google.script.host.close();
+        })
+        .runFullAutoSearch(keyword);
     }
   </script>
 </body>
