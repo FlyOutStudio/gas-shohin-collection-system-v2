@@ -391,59 +391,175 @@ function enrichByDiffbot() {
     if (store !== 'Google検索') continue;
     if (!url || typeof url !== 'string' || !url.startsWith('http')) continue;
 
-    // 7日以内取得済みチェック（L列 = FetchedAt）
-    const fetchedAtCol = col.d_col + 8; // L列（9列目）
-    const fetchedAt = sh.getRange(rowIndex, fetchedAtCol).getValue();
-    if (fetchedAt && (now - new Date(fetchedAt)) / (1000 * 3600 * 24) < 7) continue;
+    // 直接PDF出力のため、7日チェックは簡略化（今回は全て処理）
 
     try {
       const prod = fetchProductFromDiffbot_(url, token);
 
-      // ヘッダー行に項目名を設定（初回のみ）
-      if (rowIndex === 2) {
-        const headers = ['Title', 'Price', 'Brand', 'Rating', 'ReviewCount', 'Availability', 'Category', 'MainImage', 'FetchedAt'];
-        headers.forEach((header, idx) => {
-          sh.getRange(1, col.d_col + idx).setValue(header);
-        });
-      }
-
-      // 数値・計算
-      const price = toNum_(prod.offerPrice ?? prod.price);
-      const mainImage = Array.isArray(prod.images) ? (prod.images[0] || '') : '';
-      const category = (prod.category || prod.breadcrumb || []).toString();
-
-      // D〜L列（9列）にデータを出力
-      const diffbotData = [
-        prod.title || '',                              // D列: Title
-        price || '',                                   // E列: Price  
-        prod.brand || '',                              // F列: Brand
-        prod?.aggregateRating?.value || '',            // G列: Rating
-        prod?.aggregateRating?.count || '',            // H列: ReviewCount
-        prod.availability || '',                       // I列: Availability
-        category,                                      // J列: Category
-        mainImage,                                     // K列: MainImage
-        new Date()                                     // L列: FetchedAt
-      ];
-
-      // D〜L列に一括書き込み
-      sh.getRange(rowIndex, col.d_col, 1, diffbotData.length).setValues([diffbotData]);
+      // Diffbot詳細情報をPDF用配列に蓄積
+      if (!globalThis.diffbotResults) globalThis.diffbotResults = [];
+      
+      globalThis.diffbotResults.push({
+        rank: store === 'Google検索' ? i + 1 : 'N/A',
+        title: rows[i][idxOf_(header, '商品名') - 1] || '',
+        url: url,
+        diffbotData: {
+          title: prod.title || '',
+          price: toNum_(prod.offerPrice ?? prod.price) || '',
+          currency: prod?.offerPriceDetails?.currency || prod?.priceCurrency || '',
+          oldPrice: toNum_(prod.regularPrice) || '',
+          discount: calculateDiscount_(prod),
+          brand: prod.brand || '',
+          rating: prod?.aggregateRating?.value || '',
+          reviewCount: prod?.aggregateRating?.count || '',
+          availability: prod.availability || '',
+          category: (prod.category || prod.breadcrumb || []).toString(),
+          mainImage: Array.isArray(prod.images) ? (prod.images[0] || '') : '',
+          seller: prod.seller || '',
+          sku: prod.sku || '',
+          fetchedAt: new Date()
+        }
+      });
 
     } catch (e) {
-      // エラー時はD列にエラーメッセージ
-      sh.getRange(rowIndex, col.d_col).setValue(`ERR: ${String(e).slice(0, 100)}`);
+      console.error(`Diffbot取得エラー [${url}]: ${e.message}`);
+      if (!globalThis.diffbotResults) globalThis.diffbotResults = [];
+      globalThis.diffbotResults.push({
+        rank: i + 1,
+        title: rows[i][idxOf_(header, '商品名') - 1] || '',
+        url: url,
+        error: String(e).slice(0, 200)
+      });
     }
 
     // Freeレート対策
     Utilities.sleep(DIFFBOT_SLEEP_MS);
   }
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .toast('Google検索結果のDiffbot詳細取得が完了しました', 'Diffbot', 5);
+  // 蓄積したDiffbot結果からPDF作成
+  if (globalThis.diffbotResults && globalThis.diffbotResults.length > 0) {
+    try {
+      const pdfFile = createDiffbotDetailsPdfDirect_(globalThis.diffbotResults);
+      SpreadsheetApp.getActiveSpreadsheet()
+        .toast(`Diffbot詳細取得完了！PDFレポート作成: ${pdfFile.getName()}`, 'Diffbot', 10);
+      // 結果配列をクリア
+      globalThis.diffbotResults = [];
+    } catch (e) {
+      console.error('PDF作成エラー:', e.message);
+      SpreadsheetApp.getActiveSpreadsheet()
+        .toast('Diffbot詳細取得完了。PDF作成でエラーが発生しました。', 'Diffbot', 5);
+    }
+  } else {
+    SpreadsheetApp.getActiveSpreadsheet()
+      .toast('Google検索結果のDiffbot詳細取得が完了しました', 'Diffbot', 5);
+  }
+}
+
+/** 割引率計算 */
+function calculateDiscount_(prod) {
+  const price = toNum_(prod.offerPrice ?? prod.price);
+  const old = toNum_(prod.regularPrice);
+  return (price && old && old > price) ? Math.round((1 - price / old) * 100) + '%' : '';
 }
 
 /* ------------------------------------------------------------------ */
 /* 8. Diffbot結果PDF出力機能                                          */
 /* ------------------------------------------------------------------ */
+/**
+ * Diffbot取得データから直接PDFを作成（列出力なし）
+ */
+function createDiffbotDetailsPdfDirect_(diffbotResults) {
+  const keyword = SpreadsheetApp.getActiveSheet().getName().split('_')[1] || 'search';
+  const timestamp = Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd_HHmmss');
+  const docName = `Diffbot詳細レポート_${keyword}_${timestamp}`;
+  
+  const doc = DocumentApp.create(docName);
+  const body = doc.getBody();
+  
+  // タイトル・サマリー
+  body.appendParagraph(`商品詳細分析レポート: ${keyword}`)
+      .setHeading(DocumentApp.ParagraphHeading.TITLE);
+  body.appendParagraph(`作成日時: ${Utilities.formatDate(new Date(), 'JST', 'yyyy年MM月dd日 HH:mm:ss')}`)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body.appendParagraph(`分析対象: Google検索結果 ${diffbotResults.length}件`)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body.appendHorizontalRule();
+  
+  // 商品別詳細情報
+  diffbotResults.forEach((result, index) => {
+    // 商品ヘッダー
+    body.appendParagraph(`${result.rank}位: ${result.title}`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    
+    body.appendParagraph(`URL: ${result.url}`)
+        .setFontSize(10)
+        .setForegroundColor('#0066cc');
+    
+    if (result.error) {
+      // エラーの場合
+      body.appendParagraph(`Diffbot取得エラー: ${result.error}`)
+          .setItalic(true)
+          .setForegroundColor('#cc0000');
+    } else if (result.diffbotData) {
+      // 正常取得の場合、詳細テーブル作成
+      const data = result.diffbotData;
+      const table = body.appendTable();
+      
+      // 基本情報
+      if (data.title) table.appendTableRow(['商品名', data.title]);
+      if (data.price) {
+        const priceText = data.currency ? `${data.price} ${data.currency}` : data.price;
+        const priceRow = table.appendTableRow(['価格', priceText]);
+        if (data.oldPrice) {
+          priceRow.getCell(1).appendText(` (通常価格: ${data.oldPrice})`);
+        }
+        if (data.discount) {
+          priceRow.getCell(1).appendText(` [${data.discount}OFF]`);
+        }
+      }
+      if (data.brand) table.appendTableRow(['ブランド', data.brand]);
+      if (data.rating) {
+        const ratingText = `${data.rating}/5`;
+        if (data.reviewCount) {
+          table.appendTableRow(['評価', `${ratingText} (${data.reviewCount}件のレビュー)`]);
+        } else {
+          table.appendTableRow(['評価', ratingText]);
+        }
+      }
+      if (data.availability) table.appendTableRow(['在庫状況', data.availability]);
+      if (data.seller) table.appendTableRow(['販売者', data.seller]);
+      if (data.sku) table.appendTableRow(['商品コード', data.sku]);
+      if (data.category) table.appendTableRow(['カテゴリ', data.category]);
+      if (data.mainImage) table.appendTableRow(['メイン画像', data.mainImage]);
+      
+      // テーブルスタイル
+      table.setBorderWidth(1);
+      table.setColumnWidth(0, 120);
+    }
+    
+    body.appendParagraph(''); // 空行
+    
+    if (index < diffbotResults.length - 1) {
+      body.appendHorizontalRule();
+    }
+  });
+  
+  doc.saveAndClose();
+  
+  // PDF作成・保存
+  const folder = CONFIG.SCREENSHOT_FOLDER_ID
+    ? DriveApp.getFolderById(CONFIG.SCREENSHOT_FOLDER_ID)
+    : DriveApp.getRootFolder();
+  
+  const pdfBlob = doc.getAs('application/pdf');
+  pdfBlob.setName(`${docName}.pdf`);
+  const pdfFile = folder.createFile(pdfBlob);
+  
+  // 元のGoogleドキュメントを削除
+  DriveApp.getFileById(doc.getId()).setTrashed(true);
+  
+  return pdfFile;
+}
 /**
  * DiffbotでGoogle検索結果の詳細情報を取得してPDF化
  */
