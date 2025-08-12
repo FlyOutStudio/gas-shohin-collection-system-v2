@@ -254,13 +254,10 @@ const captureWithScreenshotOne_ = (rawUrl) => {
     full_page    : true,
     format       : 'pdf',
     block_ads    : true,
-    wait_until   : 'networkidle0', // JS多めのECでも成功率↑
-    response_type: 'json'          // JSONでURLを受け取る
-    // 必要なら追加:
-    // device_scale_factor: 2,
-    // viewport_width: 1280,
-    // viewport_height: 2000,
-    // delay: 1000, // ms
+    wait_until   : 'domcontentloaded', // networkidle0より軽量で高速
+    timeout      : 30,                 // 30秒タイムアウト（デフォルト15秒より長め）
+    delay        : 1000,               // 1秒待機でJS実行を保証
+    response_type: 'json'
   };
 
   const res  = UrlFetchApp.fetch(`${endpoint}?${toQuery(qs)}`, { muteHttpExceptions: true, method: 'get' });
@@ -331,9 +328,11 @@ function captureScreenshots() {
         const shotUrl = captureWithScreenshotOne_(url);
         sheet.getRange(idx + 2, col.shot).setValue(shotUrl);
         quota[store]++;
-        Utilities.sleep(1200); // API優しめウェイト
+        Utilities.sleep(2000); // より長めの待機（タイムアウト対策）
       } catch (e) {
-        sheet.getRange(idx + 2, col.shot).setValue(`ERR: ${e.message}`);
+        console.error(`スクリーンショット失敗: ${url} - ${e.message}`);
+        sheet.getRange(idx + 2, col.shot).setValue(`SKIP: タイムアウト`);
+        // タイムアウト時は次のURLに進む（処理を止めない）
       }
     }
   });
