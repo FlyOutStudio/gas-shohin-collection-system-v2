@@ -257,7 +257,7 @@ const captureWithScreenshotOne_ = (rawUrl) => {
     wait_until      : 'networkidle2',  // ECサイトに最適：2つ以下の接続で待機
     timeout         : 60,              // 60秒タイムアウト（公式推奨デフォルト）
     navigation_timeout: 30,            // サイト応答待機30秒
-    delay           : 2000,            // 2秒待機でJS・画像読み込み保証
+    delay           : 3,               // 3秒待機でJS・画像読み込み保証（秒単位）
     viewport_width  : 1280,            // 標準的なデスクトップサイズ
     viewport_height : 1024,            // 適度な高さで重い処理を回避
     response_type   : 'json'
