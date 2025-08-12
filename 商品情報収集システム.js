@@ -43,6 +43,7 @@ function onOpen() {
     .addSeparator()
     .addItem('各モール上位3件のPDFスクショを取得', 'captureScreenshots')
     .addItem('Google検索結果をDiffbotで詳細分析', 'enrichByDiffbot')
+    .addItem('Diffbot詳細レポートをPDF出力', 'createDiffbotDetailsPdf')
     .addToUi();
 }
 
@@ -369,24 +370,7 @@ function enrichByDiffbot() {
 
   const col = {
     url   : idxOf_(header, 'URL'),
-    d_ts  : ensureCol_(sh, header, 'D_FetchedAt'),
-    d_err : ensureCol_(sh, header, 'D_Error'),
-    d_title: ensureCol_(sh, header, 'D_Title'),
-    d_price: ensureCol_(sh, header, 'D_Price'),
-    d_curr : ensureCol_(sh, header, 'D_Currency'),
-    d_old  : ensureCol_(sh, header, 'D_OldPrice'),
-    d_disc : ensureCol_(sh, header, 'D_Discount%'),
-    d_av   : ensureCol_(sh, header, 'D_Availability'),
-    d_rate : ensureCol_(sh, header, 'D_Rating'),
-    d_cnt  : ensureCol_(sh, header, 'D_ReviewCount'),
-    d_brand: ensureCol_(sh, header, 'D_Brand'),
-    d_sku  : ensureCol_(sh, header, 'D_SKU'),
-    d_seller: ensureCol_(sh, header, 'D_Seller'),
-    d_img  : ensureCol_(sh, header, 'D_MainImage'),
-    d_imgs : ensureCol_(sh, header, 'D_ImagesJSON'),
-    d_vars : ensureCol_(sh, header, 'D_VariantsJSON'),
-    d_cat  : ensureCol_(sh, header, 'D_Category'),
-    d_rev3 : ensureCol_(sh, header, 'D_ReviewsTop3')
+    d_col : sh.getLastColumn() + 1 // 最後の列の次から開始（D列相当）
   };
 
   const lastRow = sh.getLastRow();
@@ -407,54 +391,46 @@ function enrichByDiffbot() {
     if (store !== 'Google検索') continue;
     if (!url || typeof url !== 'string' || !url.startsWith('http')) continue;
 
-    const fetchedAt = rows[i][col.d_ts - 1];
+    // 7日以内取得済みチェック（L列 = FetchedAt）
+    const fetchedAtCol = col.d_col + 8; // L列（9列目）
+    const fetchedAt = sh.getRange(rowIndex, fetchedAtCol).getValue();
     if (fetchedAt && (now - new Date(fetchedAt)) / (1000 * 3600 * 24) < 7) continue;
 
     try {
       const prod = fetchProductFromDiffbot_(url, token);
 
+      // ヘッダー行に項目名を設定（初回のみ）
+      if (rowIndex === 2) {
+        const headers = ['Title', 'Price', 'Brand', 'Rating', 'ReviewCount', 'Availability', 'Category', 'MainImage', 'FetchedAt'];
+        headers.forEach((header, idx) => {
+          sh.getRange(1, col.d_col + idx).setValue(header);
+        });
+      }
+
       // 数値・計算
       const price = toNum_(prod.offerPrice ?? prod.price);
-      const old   = toNum_(prod.regularPrice);
-      const curr  = prod?.offerPriceDetails?.currency || prod?.priceCurrency || '';
-      const disc  = (price && old && old > price) ? Math.round((1 - price / old) * 100) : '';
+      const mainImage = Array.isArray(prod.images) ? (prod.images[0] || '') : '';
+      const category = (prod.category || prod.breadcrumb || []).toString();
 
-      // 画像・バリエーション・カテゴリ等
-      const images = Array.isArray(prod.images) ? prod.images.slice(0, 12) : [];
-      const mainImage = images[0] || '';
-      const variants  = prod.variants || [];
-      const category  = (prod.category || prod.breadcrumb || []).toString();
+      // D〜L列（9列）にデータを出力
+      const diffbotData = [
+        prod.title || '',                              // D列: Title
+        price || '',                                   // E列: Price  
+        prod.brand || '',                              // F列: Brand
+        prod?.aggregateRating?.value || '',            // G列: Rating
+        prod?.aggregateRating?.count || '',            // H列: ReviewCount
+        prod.availability || '',                       // I列: Availability
+        category,                                      // J列: Category
+        mainImage,                                     // K列: MainImage
+        new Date()                                     // L列: FetchedAt
+      ];
 
-      // レビュー上位3件
-      const rev3 = JSON.stringify((prod.reviews || []).slice(0, 3).map(v => ({
-        title: v.title || '',
-        rating: v.rating || '',
-        text: trim_(v.text, 300)
-      })));
-
-      // セル書き込み
-      sh.getRange(rowIndex, col.d_title ).setValue(prod.title || '');
-      sh.getRange(rowIndex, col.d_price ).setValue(price || '');
-      sh.getRange(rowIndex, col.d_curr  ).setValue(curr || '');
-      sh.getRange(rowIndex, col.d_old   ).setValue(old || '');
-      sh.getRange(rowIndex, col.d_disc  ).setValue(disc || '');
-      sh.getRange(rowIndex, col.d_av    ).setValue(prod.availability || '');
-      sh.getRange(rowIndex, col.d_rate  ).setValue(prod?.aggregateRating?.value || '');
-      sh.getRange(rowIndex, col.d_cnt   ).setValue(prod?.aggregateRating?.count || '');
-      sh.getRange(rowIndex, col.d_brand ).setValue(prod.brand || '');
-      sh.getRange(rowIndex, col.d_sku   ).setValue(prod.sku || '');
-      sh.getRange(rowIndex, col.d_seller).setValue(prod.seller || '');
-      sh.getRange(rowIndex, col.d_img   ).setValue(mainImage);
-      sh.getRange(rowIndex, col.d_imgs  ).setValue(JSON.stringify(images));
-      sh.getRange(rowIndex, col.d_vars  ).setValue(JSON.stringify(variants));
-      sh.getRange(rowIndex, col.d_cat   ).setValue(category);
-      sh.getRange(rowIndex, col.d_rev3  ).setValue(rev3);
-      sh.getRange(rowIndex, col.d_err   ).setValue('');
-      sh.getRange(rowIndex, col.d_ts    ).setValue(new Date());
+      // D〜L列に一括書き込み
+      sh.getRange(rowIndex, col.d_col, 1, diffbotData.length).setValues([diffbotData]);
 
     } catch (e) {
-      sh.getRange(rowIndex, col.d_err).setValue(String(e).slice(0, 500));
-      sh.getRange(rowIndex, col.d_ts ).setValue(new Date());
+      // エラー時はD列にエラーメッセージ
+      sh.getRange(rowIndex, col.d_col).setValue(`ERR: ${String(e).slice(0, 100)}`);
     }
 
     // Freeレート対策
@@ -463,6 +439,135 @@ function enrichByDiffbot() {
 
   SpreadsheetApp.getActiveSpreadsheet()
     .toast('Google検索結果のDiffbot詳細取得が完了しました', 'Diffbot', 5);
+}
+
+/* ------------------------------------------------------------------ */
+/* 8. Diffbot結果PDF出力機能                                          */
+/* ------------------------------------------------------------------ */
+/**
+ * DiffbotでGoogle検索結果の詳細情報を取得してPDF化
+ */
+function createDiffbotDetailsPdf() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  
+  // Google検索結果のみ抽出
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    SpreadsheetApp.getUi().alert('データがありません。');
+    return;
+  }
+  
+  const rows = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  const googleResults = rows.filter(row => row[idxOf_(header, 'モール') - 1] === 'Google検索');
+  
+  if (googleResults.length === 0) {
+    SpreadsheetApp.getUi().alert('Google検索結果が見つかりません。');
+    return;
+  }
+  
+  // PDF作成
+  const keyword = sheet.getName().split('_')[1] || 'search';
+  const timestamp = Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd_HHmmss');
+  const docName = `Diffbot詳細レポート_${keyword}_${timestamp}`;
+  
+  const doc = DocumentApp.create(docName);
+  const body = doc.getBody();
+  
+  // タイトル・日時
+  body.appendParagraph(`商品詳細分析レポート: ${keyword}`)
+      .setHeading(DocumentApp.ParagraphHeading.TITLE);
+  body.appendParagraph(`作成日時: ${Utilities.formatDate(new Date(), 'JST', 'yyyy年MM月dd日 HH:mm:ss')}`)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body.appendParagraph(`分析対象: Google検索結果 ${googleResults.length}件`)
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  body.appendHorizontalRule();
+  
+  // 各商品の詳細情報
+  googleResults.forEach((row, index) => {
+    const rank = row[idxOf_(header, 'ランキング順位') - 1];
+    const title = row[idxOf_(header, '商品名') - 1];
+    const url = row[idxOf_(header, 'URL') - 1];
+    
+    // 商品タイトル
+    body.appendParagraph(`${rank}位: ${title}`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    
+    // URL
+    body.appendParagraph(`URL: ${url}`)
+        .setFontSize(10)
+        .setForegroundColor('#0066cc');
+    
+    // Diffbot詳細情報があるかチェック
+    const diffbotDataFound = checkDiffbotData_(row, header);
+    
+    if (diffbotDataFound.hasData) {
+      // テーブル形式で詳細情報を表示
+      const table = body.appendTable();
+      
+      // 基本情報
+      if (diffbotDataFound.title) table.appendTableRow(['商品名', diffbotDataFound.title]);
+      if (diffbotDataFound.price) table.appendTableRow(['価格', `${diffbotDataFound.price} ${diffbotDataFound.currency || ''}`]);
+      if (diffbotDataFound.brand) table.appendTableRow(['ブランド', diffbotDataFound.brand]);
+      if (diffbotDataFound.rating) table.appendTableRow(['評価', `${diffbotDataFound.rating}/5 (${diffbotDataFound.reviewCount || 0}件)`]);
+      if (diffbotDataFound.availability) table.appendTableRow(['在庫状況', diffbotDataFound.availability]);
+      if (diffbotDataFound.category) table.appendTableRow(['カテゴリ', diffbotDataFound.category]);
+      
+      // テーブルスタイル
+      table.setBorderWidth(1);
+      table.setColumnWidth(0, 100);
+      
+    } else {
+      body.appendParagraph('Diffbot詳細情報: 未取得')
+          .setItalic(true)
+          .setForegroundColor('#666666');
+    }
+    
+    body.appendParagraph(''); // 空行
+    
+    if (index < googleResults.length - 1) {
+      body.appendHorizontalRule();
+    }
+  });
+  
+  doc.saveAndClose();
+  
+  // PDF作成
+  const folder = CONFIG.SCREENSHOT_FOLDER_ID
+    ? DriveApp.getFolderById(CONFIG.SCREENSHOT_FOLDER_ID)
+    : DriveApp.getRootFolder();
+  
+  const pdfBlob = doc.getAs('application/pdf');
+  pdfBlob.setName(`${docName}.pdf`);
+  const pdfFile = folder.createFile(pdfBlob);
+  
+  // 元のGoogleドキュメントを削除
+  DriveApp.getFileById(doc.getId()).setTrashed(true);
+  
+  SpreadsheetApp.getActiveSpreadsheet()
+    .toast(`PDF作成完了: ${pdfFile.getName()}`, 'Diffbot PDF', 10);
+  
+  return pdfFile;
+}
+
+/** Diffbotデータの存在チェックと取得 */
+function checkDiffbotData_(row, header) {
+  const getData = (colName) => {
+    const idx = idxOf_(header, colName);
+    return idx > 0 ? row[idx - 1] : '';
+  };
+  
+  return {
+    hasData: getData('D_Title') || getData('D_Price') || getData('D_Brand'),
+    title: getData('D_Title'),
+    price: getData('D_Price'),
+    currency: getData('D_Currency'),
+    brand: getData('D_Brand'),
+    rating: getData('D_Rating'),
+    reviewCount: getData('D_ReviewCount'),
+    availability: getData('D_Availability'),
+    category: getData('D_Category')
+  };
 }
 
 /** Diffbot呼び出し（必要フィールドだけに絞って軽量化） */
