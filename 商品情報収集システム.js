@@ -9,6 +9,8 @@
  * ▼ Script Properties に設定しておくキー
  *   - RAKUTEN_APP_ID            : 楽天 API アプリ ID（必須）
  *   - YAHOO_APP_ID              : Yahoo API アプリ ID（必須）
+ *   - GOOGLE_API_KEY            : Google Custom Search API キー（必須）
+ *   - GOOGLE_SEARCH_ENGINE_ID   : Google 検索エンジン ID（必須）
  *   - SCREENSHOTONE_ACCESS_KEY  : ScreenshotOne アクセスキー（必須）
  *   - SCREENSHOT_FOLDER_ID      : Drive 保存先フォルダ ID（任意）
  *   - DIFFBOT_TOKEN             : Diffbot アクセストークン（必須）
@@ -17,12 +19,15 @@
 const CONFIG = {
   RAKUTEN_APP_ID             : PropertiesService.getScriptProperties().getProperty('RAKUTEN_APP_ID'),
   YAHOO_APP_ID               : PropertiesService.getScriptProperties().getProperty('YAHOO_APP_ID'),
+  GOOGLE_API_KEY             : PropertiesService.getScriptProperties().getProperty('GOOGLE_API_KEY'),
+  GOOGLE_SEARCH_ENGINE_ID    : PropertiesService.getScriptProperties().getProperty('GOOGLE_SEARCH_ENGINE_ID'),
   SCREENSHOTONE_ACCESS_KEY   : PropertiesService.getScriptProperties().getProperty('SCREENSHOTONE_ACCESS_KEY'),
   SCREENSHOT_FOLDER_ID       : PropertiesService.getScriptProperties().getProperty('SCREENSHOT_FOLDER_ID'),
   DIFFBOT_TOKEN              : PropertiesService.getScriptProperties().getProperty('DIFFBOT_TOKEN'),
 
   RAKUTEN_SEARCH_API         : 'https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601',
-  YAHOO_ITEM_API             : 'https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch'
+  YAHOO_ITEM_API             : 'https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch',
+  GOOGLE_SEARCH_API          : 'https://www.googleapis.com/customsearch/v1'
 };
 
 // 取得件数（楽天/Yahoo共通）
@@ -34,10 +39,10 @@ const TOP_N = 10;
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('商品調査ツール')
-    .addItem('商品情報を収集', 'showSearchDialog')
+    .addItem('商品情報を収集（楽天・Yahoo・Google）', 'showSearchDialog')
     .addSeparator()
-    .addItem('URLスクショを取得', 'captureScreenshots')
-    .addItem('Diffbotで詳細取得（現在シート）', 'enrichByDiffbot')
+    .addItem('各モール上位3件のPDFスクショを取得', 'captureScreenshots')
+    .addItem('Google検索結果をDiffbotで詳細分析', 'enrichByDiffbot')
     .addToUi();
 }
 
@@ -56,7 +61,7 @@ function showSearchDialog() {
 function searchProducts(keyword) {
   if (!keyword) throw new Error('キーワードが空です');
 
-  const { rakuten, yahoo } = getProducts(keyword.trim());
+  const { rakuten, yahoo, google } = getProducts(keyword.trim());
 
   const sheetName = `結果_${keyword}_${Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd_HHmmss')}`;
   const sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(sheetName);
@@ -68,15 +73,15 @@ function searchProducts(keyword) {
   ];
   sheet.appendRow(headers);
 
-  // データ行
-  [...rakuten, ...yahoo].forEach(p =>
+  // データ行（楽天・Yahoo・Googleの順で出力）
+  [...rakuten, ...yahoo, ...google].forEach(p =>
     sheet.appendRow([
       p.collectedAt, p.platform, p.rank, p.name, p.price,
       p.url, p.shopName, p.reviewCount, p.reviewAvg, '', p.description
     ])
   );
 
-  return `検索完了：${rakuten.length + yahoo.length} 件取得`;
+  return `検索完了：${rakuten.length + yahoo.length + google.length} 件取得`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -84,7 +89,8 @@ function searchProducts(keyword) {
 /* ------------------------------------------------------------------ */
 const getProducts = (keyword) => ({
   rakuten: fetchRakutenItems(keyword, TOP_N),
-  yahoo  : fetchYahooItems(keyword, TOP_N)
+  yahoo  : fetchYahooItems(keyword, TOP_N),
+  google : fetchGoogleItems(keyword, TOP_N)
 });
 
 /* -------- 楽天：rank 付与・URL そのまま --------------------------- */
@@ -116,6 +122,54 @@ const fetchRakutenItems = (keyword, hits = 10) => {
     reviewAvg   : it.reviewAverage,
     description : it.itemCaption ?? ''
   }));
+};
+
+/* -------- Google：rank 付与 ------------------------------------- */
+const fetchGoogleItems = (keyword, hits = 10) => {
+  if (!CONFIG.GOOGLE_API_KEY || !CONFIG.GOOGLE_SEARCH_ENGINE_ID) {
+    console.warn('Google Custom Search API の設定が不完全です');
+    return [];
+  }
+
+  const params = toQuery({
+    key: CONFIG.GOOGLE_API_KEY,
+    cx: CONFIG.GOOGLE_SEARCH_ENGINE_ID,
+    q: keyword,
+    num: Math.min(hits, 10), // Google APIは最大10件
+    lr: 'lang_ja', // 日本語検索
+    safe: 'medium'
+  });
+
+  try {
+    const raw = UrlFetchApp.fetch(`${CONFIG.GOOGLE_SEARCH_API}?${params}`).getContentText();
+    const data = JSON.parse(raw);
+    const items = data.items || [];
+
+    return items.map((it, idx) => ({
+      rank        : idx + 1,
+      collectedAt : new Date(),
+      platform    : 'Google検索',
+      name        : it.title,
+      price       : '', // Google検索には価格情報なし
+      url         : it.link,
+      shopName    : extractDomain(it.link),
+      reviewCount : '',
+      reviewAvg   : '',
+      description : it.snippet || ''
+    }));
+  } catch (e) {
+    console.error('Google検索エラー:', e.message);
+    return [];
+  }
+};
+
+// URLからドメイン名を抽出
+const extractDomain = (url) => {
+  try {
+    return new URL(url).hostname.replace('www.', '');
+  } catch (e) {
+    return url;
+  }
 };
 
 /* -------- Yahoo!：rank 付与 -------------------------------------- */
@@ -184,6 +238,7 @@ function trim_(s, n) {
  * ScreenshotOne でフルページ JPEG を取得 → Drive 保存 → 共有URLを返す
  * - 無料枠: 100枚/月
  * - 必須: Script Property SCREENSHOTONE_ACCESS_KEY
+ * - 対象: Google検索結果のみ
  */
 const captureWithScreenshotOne_ = (rawUrl) => {
   const key = CONFIG.SCREENSHOTONE_ACCESS_KEY;
@@ -197,7 +252,7 @@ const captureWithScreenshotOne_ = (rawUrl) => {
     access_key   : key,
     url,
     full_page    : true,
-    format       : 'jpeg',
+    format       : 'pdf',
     block_ads    : true,
     wait_until   : 'networkidle0', // JS多めのECでも成功率↑
     response_type: 'json'          // JSONでURLを受け取る
@@ -219,7 +274,7 @@ const captureWithScreenshotOne_ = (rawUrl) => {
   const shotUrl = data.screenshot_url || data.url || (data.data?.screenshot?.url);
   if (!shotUrl) throw new Error('ScreenshotOne: screenshot URL not found');
 
-  const blob = UrlFetchApp.fetch(shotUrl).getBlob().setName(`shot_${Date.now()}.jpg`);
+  const blob = UrlFetchApp.fetch(shotUrl).getBlob().setName(`shot_${Date.now()}.pdf`);
   const folder = CONFIG.SCREENSHOT_FOLDER_ID
     ? DriveApp.getFolderById(CONFIG.SCREENSHOT_FOLDER_ID)
     : DriveApp.getRootFolder();
@@ -232,10 +287,11 @@ const captureWithScreenshotOne_ = (rawUrl) => {
 /* 6. URL 列のスクショを一括取得して「スクショURL」列へ書込み         */
 /* ------------------------------------------------------------------ */
 /**
- * アクティブシートの URL 列から
- *   ・楽天市場     ランキング順位 1〜3
+ * アクティブシートの URL 列から各モールの上位3件をスクリーンショット取得
+ *   ・楽天市場 ランキング順位 1〜3
  *   ・Yahoo!ショッピング ランキング順位 1〜3
- * のみを ScreenshotOne でフルページ撮影し「スクショURL」列へ保存
+ *   ・Google検索 ランキング順位 1〜3
+ * ScreenshotOne でフルページ撮影し「スクショURL」列へ保存後、PDF出力
  */
 function captureScreenshots() {
   const sheet  = SpreadsheetApp.getActiveSheet();
@@ -245,7 +301,8 @@ function captureScreenshots() {
     url   : idxOf_(header, 'URL'),
     rank  : idxOf_(header, 'ランキング順位'),
     store : idxOf_(header, 'モール'),
-    shot  : idxOf_(header, 'スクショURL')
+    shot  : idxOf_(header, 'スクショURL'),
+    name  : idxOf_(header, '商品名')
   };
   if (col.url === 0 || col.rank === 0 || col.store === 0) {
     SpreadsheetApp.getUi().alert('ヘッダーに必要な列（URL／モール／ランキング順位）が見つかりません。');
@@ -259,20 +316,21 @@ function captureScreenshots() {
   const lastRow = sheet.getLastRow();
   const rows    = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
 
-  // 各モールの上位3件だけ処理
-  const quota = { '楽天市場': 0, 'Yahoo!ショッピング': 0 };
+  // 各モールの上位3件を処理
+  const quota = { '楽天市場': 0, 'Yahoo!ショッピング': 0, 'Google検索': 0 };
 
   rows.forEach((r, idx) => {
     const store = r[col.store - 1];
     const rank  = Number(r[col.rank - 1]);
     const url   = r[col.url - 1];
 
-    if ((store === '楽天市場' || store === 'Yahoo!ショッピング') &&
-        rank >= 1 && rank <= 3 && quota[store] < 3 && typeof url === 'string' && url.startsWith('http')) {
+    if ((store === '楽天市場' || store === 'Yahoo!ショッピング' || store === 'Google検索') &&
+        rank >= 1 && rank <= 3 && quota[store] < 3 && 
+        typeof url === 'string' && url.startsWith('http')) {
       try {
         const shotUrl = captureWithScreenshotOne_(url);
         sheet.getRange(idx + 2, col.shot).setValue(shotUrl);
-        quota[store]++;                            // カウントアップ
+        quota[store]++;
         Utilities.sleep(1200); // API優しめウェイト
       } catch (e) {
         sheet.getRange(idx + 2, col.shot).setValue(`ERR: ${e.message}`);
@@ -280,10 +338,12 @@ function captureScreenshots() {
     }
   });
 
+  const totalCount = Object.values(quota).reduce((sum, count) => sum + count, 0);
   SpreadsheetApp.getActiveSpreadsheet()
-                .toast('上位3件×2モールのスクリーンショット取得が完了しました',
+                .toast(`各モール上位3件×3（計${totalCount}件）のPDFスクリーンショット取得が完了しました`,
                        'ScreenshotOne', 5);
 }
+
 
 /* ------------------------------------------------------------------ */
 /* 7. Diffbot Product API 連携（URL→詳細を D_ 系列へ出力）            */
@@ -295,7 +355,8 @@ const DIFFBOT_SLEEP_MS = 12500;
 
 /**
  * 現在シートの各行の「URL」をDiffbotに投げて詳細抽出。
- * 直近7日以内に取得済みの行はスキップ。結果は D_ プレフィックス列に出力。
+ * Google検索結果のみ対象。直近7日以内に取得済みの行はスキップ。
+ * 結果は D_ プレフィックス列に出力。
  */
 function enrichByDiffbot() {
   const token = CONFIG.DIFFBOT_TOKEN;
@@ -338,6 +399,10 @@ function enrichByDiffbot() {
   for (let i = 0; i < rows.length; i++) {
     const rowIndex = i + 2;
     const url = rows[i][col.url - 1];
+    const store = rows[i][idxOf_(header, 'モール') - 1];
+    
+    // Google検索結果のみ処理
+    if (store !== 'Google検索') continue;
     if (!url || typeof url !== 'string' || !url.startsWith('http')) continue;
 
     const fetchedAt = rows[i][col.d_ts - 1];
@@ -395,7 +460,7 @@ function enrichByDiffbot() {
   }
 
   SpreadsheetApp.getActiveSpreadsheet()
-    .toast('Diffbotによる詳細取得が完了しました', 'Diffbot', 5);
+    .toast('Google検索結果のDiffbot詳細取得が完了しました', 'Diffbot', 5);
 }
 
 /** Diffbot呼び出し（必要フィールドだけに絞って軽量化） */
